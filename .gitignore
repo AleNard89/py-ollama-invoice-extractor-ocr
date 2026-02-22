@@ -1,0 +1,12 @@
+.DS_Store
+.env
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.log
+.idea/
+.vscode/
+*.xlsx
+*.pdf
+programma.txt
