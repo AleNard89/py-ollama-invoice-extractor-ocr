@@ -17,7 +17,7 @@ class AITrainer:
         self.fields = fields
         self.debug_mode = debug_mode
         self.client = Client()
-        self.model = 'llama3.2-vision:latest'
+        self.model = 'qwen2.5vl:7b'
         
         # Crea la directory per i dati di addestramento
         self.train_dir = os.path.join(base_dir, "training_data")
