@@ -43,9 +43,6 @@ def main():
     # Modalità debug (False per default)
     debug_mode = False
     
-    # Modalità addestramento (False per default)
-    train_mode = False
-    
     # ============ CONFIGURAZIONE OCR ============
     # Scegli uno dei seguenti OCR: "easyocr", "paddleocr", "tesseract", o None per disabilitare OCR
     #ocr_type = "easyocr"
@@ -72,7 +69,6 @@ def main():
     print(f"Directory: {pdf_folder}")
     print(f"Output: {output_excel or 'Automatico'}")
     print(f"Debug mode: {debug_mode}")
-    print(f"Train mode: {train_mode}")
     print(f"OCR: {ocr_type if use_ocr else 'Disabilitato'}")
     print(f"Use GPU: {use_gpu}")
     
@@ -83,10 +79,9 @@ def main():
         pdf_folder, 
         output_excel, 
         debug_mode, 
-        train_mode, 
-        use_ocr, 
-        ocr_type, 
-        use_gpu
+        use_ocr=use_ocr, 
+        ocr_type=ocr_type, 
+        use_gpu=use_gpu
     )
     
     # Elabora tutti i PDF

@@ -21,12 +21,11 @@ from data_validator import DataValidator
 
 
 class InvoiceProcessor:
-    def __init__(self, base_dir, output_excel=None, debug_mode=False, train_mode=False, 
+    def __init__(self, base_dir, output_excel=None, debug_mode=False, 
                  use_ocr=True, ocr_type="easyocr", use_gpu=False):
         self.base_dir = base_dir
         self.output_excel_path = output_excel or os.path.join(base_dir, f"Fatture_Estratte_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
         self.debug_mode = debug_mode
-        self.train_mode = train_mode
         self.use_ocr = use_ocr
         self.ocr_type = ocr_type
         self.use_gpu = use_gpu
@@ -341,11 +340,6 @@ class InvoiceProcessor:
                     report_path = os.path.join(debug_dir, f"{pdf_name}_report.json")
                     with open(report_path, 'w', encoding='utf-8') as f:
                         json.dump(results, f, indent=4, ensure_ascii=False)
-                
-                # Fase 4: Addestramento (se attivo)
-                if self.train_mode:
-                    print(f"Fase 4: Train mode - Salvataggio dati di addestramento")
-                    self.save_training_data(pdf_name, results, pdf_ocr_data, temp_dir)
                 
                 # Aggiungi i risultati alla lista principale
                 all_results.append(results)
