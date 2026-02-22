@@ -9,4 +9,6 @@ venv/
 .vscode/
 *.xlsx
 *.pdf
+*.png
 programma.txt
+invoice/

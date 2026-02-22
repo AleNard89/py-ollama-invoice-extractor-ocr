@@ -17,7 +17,7 @@ class AIExtractor:
         self.debug_mode = debug_mode
         self.temperature = temperature
         self.client = Client()
-        self.model = model or 'llama3.2-vision:latest' #modello trainato 'llama3.2-fatture'
+        self.model = model or 'qwen2.5vl:7b'
 
     def _extract_json(self, text):
         """Estrai dati in formato JSON dalla risposta del modello."""
