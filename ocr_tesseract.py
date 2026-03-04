@@ -20,12 +20,12 @@ class OCRProcessor:
         
         # Verifica la disponibilità di Tesseract
         try:
-            # Prova a utilizzare il comando disponibile nel PATH
             import pytesseract
-            # Su macOS, il percorso comune di Tesseract potrebbe essere:
-            pytesseract.pytesseract.tesseract_cmd = r'/opt/homebrew/bin/tesseract'
+            import shutil
+            tesseract_path = shutil.which('tesseract')
+            if tesseract_path:
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
             
-            # Test di disponibilità
             pytesseract.get_tesseract_version()
             self.tesseract_available = True
             self.ocr_available = True
