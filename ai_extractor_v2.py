@@ -5,10 +5,14 @@ Author: Alessandro.Nardelli
 Date: 2025-03-28
 """
 
-import os
 import json
+import logging
+import os
 import re
+
 from ollama import Client
+
+logger = logging.getLogger(__name__)
 
 class AIExtractor:
     def __init__(self, fields, debug_mode=False, model=None, temperature=0.1):
@@ -181,7 +185,7 @@ class AIExtractor:
             
             return result
         except Exception as e:
-            print(f"Errore nell'estrazione JSON: {str(e)}")
+            logger.error("Errore nell'estrazione JSON: %s", e)
             return {field: "non trovato" for field in self.fields}
 
     def analyze_zone(self, image_path, zone_name=None, temperature=None):

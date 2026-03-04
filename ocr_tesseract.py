@@ -1,39 +1,42 @@
 """
 File: ocr_tesseract.py
-Description: Questo script contiene la classe OCRProcessor, che estrae testo da immagini usando OCR e preserva il formato.
+Description: OCR processor using Tesseract engine with layout preservation.
 Author: Alessandro.Nardelli
-Date: 2025-03-27 (modificato)
+Date: 2025-03-27
 """
 
+import logging
 import os
 import re
-import pytesseract
+import shutil
+
 import Levenshtein
+import pytesseract
 from PIL import Image, ImageEnhance
-from datetime import datetime
 
-class OCRProcessor:
+from ocr_base import BaseOCRProcessor
 
-    def __init__(self, debug_mode=False, preserve_format=True):
-        self.debug_mode = debug_mode
+logger = logging.getLogger(__name__)
+
+
+class OCRProcessor(BaseOCRProcessor):
+
+    def __init__(self, debug_mode: bool = False, preserve_format: bool = True) -> None:
+        super().__init__(debug_mode=debug_mode)
         self.preserve_format = preserve_format
-        
-        # Verifica la disponibilità di Tesseract
+        self.tesseract_available = False
+
         try:
-            import pytesseract
-            import shutil
-            tesseract_path = shutil.which('tesseract')
+            tesseract_path = shutil.which("tesseract")
             if tesseract_path:
                 pytesseract.pytesseract.tesseract_cmd = tesseract_path
-            
+
             pytesseract.get_tesseract_version()
             self.tesseract_available = True
             self.ocr_available = True
-            print("Tesseract OCR trovato e disponibile")
+            logger.info("Tesseract OCR trovato e disponibile")
         except Exception as e:
-            self.tesseract_available = False
-            print(f"Attenzione: Tesseract OCR non disponibile: {str(e)}")
-            print("L'estrazione OCR restituirà testi vuoti. Configurare il percorso di Tesseract o utilizzare la modalità senza OCR.")
+            logger.warning("Tesseract OCR non disponibile: %s", e)
  
     def _post_process_ocr_text(self, text, preserve_format=None):
         """
@@ -203,20 +206,6 @@ class OCRProcessor:
             return 1.0
         return 1.0 - (distance / max_len)
     
-    def _are_lines_similar(self, line1, line2, threshold=0.8):
-        """Verifica se due righe sono simili usando la distanza di Levenshtein."""
-        if abs(len(line1) - len(line2)) > 10:
-            return False
-            
-        # Calcola la similarità
-        distance = Levenshtein.distance(line1, line2)
-        max_len = max(len(line1), len(line2))
-        if max_len == 0:
-            return True
-            
-        similarity = 1 - (distance / max_len)
-        return similarity > threshold
-
     def extract_ocr_text(self, image_path):
         """Estrae testo da un'immagine usando diverse tecniche OCR e le combina, preservando il formato."""
         
@@ -265,9 +254,7 @@ class OCRProcessor:
             ]
         
         if self.debug_mode:
-            print(f"{datetime.now().strftime('%Y%m%d_%H%M%S')} - Lettura tramite OCR avanzata" + 
-                 (" (preservazione formato)" if self.preserve_format else ""))
-            print("-" * 50)
+            logger.debug("Lettura tramite OCR avanzata%s", " (preservazione formato)" if self.preserve_format else "")
         
         # Applica ogni tecnica di enhancement con ogni configurazione OCR
         for enhance_func in enhancement_techniques:
@@ -313,14 +300,13 @@ class OCRProcessor:
                     #print(text)
                     
                     if self.debug_mode:
-                        print(f"Configurazione: {config[:30]}...")
-                        print(f"Primi 100 caratteri: {text[:100]}...")
-                        print("-" * 30)
+                        logger.debug("Configurazione: %s...", config[:30])
+                        logger.debug("Primi 100 caratteri: %s...", text[:100])
                     
                     all_texts.append(text)
                 except Exception as e:
                     if self.debug_mode:
-                        print(f"Errore OCR con config {config}: {str(e)}")
+                        logger.debug("Errore OCR con config %s: %s", config, e)
             
             # Rimuovi il file temporaneo
             try:
@@ -338,9 +324,9 @@ class OCRProcessor:
                 f.write(combined_text)
             
             if self.preserve_format:
-                print(f"Risultato finale salvato in {combined_file} (con preservazione formato)")
+                logger.debug("Risultato finale salvato in %s (con preservazione formato)", combined_file)
             else:
-                print(f"Risultato finale salvato in {combined_file}")
+                logger.debug("Risultato finale salvato in %s", combined_file)
         
         return combined_text
 
@@ -437,13 +423,13 @@ class OCRProcessor:
                 hocr_file = image_path.replace('.png', '_ocr_hocr.txt')
                 with open(hocr_file, 'w', encoding='utf-8') as f:
                     f.write(result)
-                print(f"Risultato hOCR salvato in {hocr_file}")
+                logger.debug("Risultato hOCR salvato in %s", hocr_file)
             
             return result
             
         except Exception as e:
             if self.debug_mode:
-                print(f"Errore nell'estrazione hOCR: {str(e)}")
+                logger.error("Errore nell'estrazione hOCR: %s", e)
             # In caso di errore, ricorri al metodo standard
             return self.extract_ocr_text(image_path)
         

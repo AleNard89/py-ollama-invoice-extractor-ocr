@@ -22,19 +22,23 @@ Il progetto converte fatture PDF in immagini, le analizza tramite un modello di 
 | `importo_iva` | Importo dell'IVA |
 | `metodo_pagamento` | Modalita' di pagamento |
 
+I campi sono configurabili tramite `config.yaml`.
+
 ## Architettura
 
 ```
-main.py                  # Entry point e configurazione
-├── invoice_processor.py # Orchestratore pipeline di elaborazione
-│   ├── pdf_processor.py     # Conversione PDF -> immagini (300 DPI)
-│   ├── image_processor.py   # Preprocessing (deskew, denoise, contrast, binarize)
-│   ├── ocr_factory.py       # Factory pattern per motori OCR
-│   │   ├── ocr_EasyOCR.py
-│   │   ├── ocr_tesseract.py
-│   │   └── ocr_paddleocr.py
-│   ├── ai_extractor_v2.py   # Estrazione dati via Ollama (vision model)
-│   └── data_validator.py    # Validazione e normalizzazione risultati
+main.py                      # Entry point, CLI, config loading
+├── config.yaml              # Configurazione centralizzata
+├── invoice_processor.py     # Orchestratore pipeline
+│   ├── pdf_processor.py         # PDF -> immagini PNG (300 DPI)
+│   ├── image_processor.py       # Preprocessing (deskew, denoise, contrast, binarize)
+│   ├── ocr_factory.py           # Factory pattern per motori OCR
+│   │   ├── ocr_base.py              # Classe base con logica OCR condivisa
+│   │   ├── ocr_EasyOCR.py           # Adapter EasyOCR
+│   │   ├── ocr_tesseract.py         # Adapter Tesseract (con preservazione layout)
+│   │   └── ocr_paddleocr.py         # Adapter PaddleOCR
+│   ├── ai_extractor_v2.py      # Estrazione dati via Ollama (vision model)
+│   └── data_validator.py       # Validazione e normalizzazione risultati
 ```
 
 ### Flusso di elaborazione
@@ -47,6 +51,7 @@ main.py                  # Entry point e configurazione
 6. **Fase 3 - OCR + AI** (opzionale): Per i campi ancora mancanti, esegue OCR e rianalizza con supporto testuale
 7. **Validazione**: Normalizzazione date, importi, verifica coerenza imponibile/IVA/totale
 8. **Output Excel**: Salvataggio risultati strutturati
+9. **Pulizia**: Rimozione automatica dei file temporanei (disabilitata in debug mode)
 
 ## Prerequisiti
 
@@ -76,17 +81,14 @@ ollama pull qwen2.5vl:7b
 ## Installazione
 
 ```bash
-# Clona il repository
-git clone https://github.com/AleNard89/ollama_ocr_v4.git
-cd ollama_ocr_v4
+git clone https://github.com/AleNard89/py-ollama-invoice-extractor-ocr.git
+cd py-ollama-invoice-extractor-ocr
 
-# Crea e attiva il virtual environment
 python -m venv .venv
 source .venv/bin/activate  # Linux/macOS
 # .venv\Scripts\activate   # Windows
 
-# Installa le dipendenze principali
-pip install pandas numpy opencv-python pdf2image ollama Levenshtein Pillow
+pip install -r requirements.txt
 
 # (Opzionale) Installa un motore OCR
 pip install easyocr                    # EasyOCR
@@ -96,18 +98,62 @@ pip install paddlepaddle paddleocr     # PaddleOCR
 
 ## Utilizzo
 
-1. Inserisci i file PDF nella cartella `invoice/` (o imposta la variabile d'ambiente `PDF_FOLDER`)
-2. Configura le opzioni in `main.py`:
-   - `ocr_type`: `"tesseract"`, `"easyocr"`, `"paddleocr"`, o `None` per disabilitare OCR
-   - `debug_mode`: `True` per salvare output intermedi
-   - `use_gpu`: `True` se disponibile una GPU compatibile
-3. Esegui:
+### CLI
 
 ```bash
+# Utilizzo base (legge da ./invoice, scrive Excel nella stessa cartella)
 python main.py
+
+# Specificare cartella input
+python main.py --input /path/to/fatture
+
+# Abilitare OCR con Tesseract
+python main.py --ocr tesseract
+
+# Debug mode (salva output intermedi, non cancella file temporanei)
+python main.py --debug
+
+# Combinare opzioni
+python main.py --input ./fatture --ocr easyocr --debug --gpu
+
+# Specificare file di configurazione custom
+python main.py --config /path/to/config.yaml
 ```
 
-Il file Excel con i risultati viene generato automaticamente nella cartella `invoice/`.
+### Opzioni CLI
+
+| Opzione | Descrizione |
+|---------|-------------|
+| `-i`, `--input` | Cartella contenente i PDF (default: `./invoice`) |
+| `-o`, `--output` | Percorso file Excel di output (default: auto-generato) |
+| `--ocr` | Motore OCR: `easyocr`, `paddleocr`, `tesseract` (default: disabilitato) |
+| `--debug` | Attiva debug mode |
+| `--gpu` | Usa GPU per OCR |
+| `--config` | Percorso al file `config.yaml` |
+
+### Configurazione
+
+Il file `config.yaml` permette di configurare tutti i parametri senza modificare il codice:
+
+```yaml
+ai:
+  model: "qwen2.5vl:7b"
+  temperature: 0.1
+
+ocr:
+  engine: null        # easyocr, paddleocr, tesseract, o null
+  use_gpu: false
+
+output:
+  debug_mode: false
+
+fields:
+  - numero_fattura
+  - data_emissione
+  # ... altri campi
+```
+
+Le opzioni CLI hanno priorita' sul file di configurazione.
 
 ## Motori OCR supportati
 
@@ -117,26 +163,6 @@ Il file Excel con i risultati viene generato automaticamente nella cartella `inv
 | **Tesseract** | Leggero, ben documentato | Richiede installazione di sistema |
 | **EasyOCR** | Buon supporto multilingua | Piu' lento, usa piu' memoria |
 | **PaddleOCR** | Ottimo per layout complessi | Installazione piu' complessa |
-
-## Struttura del progetto
-
-```
-ollama_ocr_v4/
-├── main.py                 # Entry point
-├── invoice_processor.py    # Orchestratore pipeline
-├── ai_extractor_v2.py      # Estrattore AI (Ollama)
-├── data_validator.py       # Validatore dati
-├── image_processor.py      # Preprocessor immagini
-├── pdf_processor.py        # Convertitore PDF
-├── ocr_factory.py          # Factory OCR
-├── ocr_EasyOCR.py          # Adapter EasyOCR
-├── ocr_tesseract.py        # Adapter Tesseract
-├── ocr_paddleocr.py        # Adapter PaddleOCR
-├── Prompt.txt              # Prompt di riferimento per l'AI
-├── req.txt                 # Dipendenze
-├── invoice/                # Cartella input PDF (gitignored)
-└── .gitignore
-```
 
 ## Requisiti di sistema
 

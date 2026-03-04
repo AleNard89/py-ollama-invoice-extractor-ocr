@@ -1,6 +1,6 @@
 """
 File: invoice_processor.py
-Description: Versione aggiornata compatibile con AIExtractor semplificato
+Description: Pipeline orchestrator for invoice data extraction.
 Author: Alessandro.Nardelli
 Date: 2025-03-28
 """
@@ -8,71 +8,95 @@ Date: 2025-03-28
 import os
 import glob
 import json
+import logging
+import shutil
 import time
-import re
+from typing import Any
+
 import pandas as pd
-import tempfile
-from datetime import datetime
+
 from pdf_processor import PDFProcessor
 from image_processor import ImageProcessor
 from ocr_factory import OCRFactory
 from ai_extractor_v2 import AIExtractor
 from data_validator import DataValidator
 
+logger = logging.getLogger(__name__)
+
+DEFAULT_FIELDS = [
+    "numero_fattura",
+    "data_emissione",
+    "fornitore",
+    "partita_iva_fornitore",
+    "cliente",
+    "partita_iva_cliente",
+    "importo_totale",
+    "imponibile",
+    "percentuale_iva",
+    "importo_iva",
+    "metodo_pagamento",
+]
+
+DEFAULT_ZONES = {
+    "intestazione": (0, 0.35),
+    "corpo": (0.25, 0.75),
+    "pie_pagina": (0.65, 1.0),
+}
+
 
 class InvoiceProcessor:
-    def __init__(self, base_dir, output_excel=None, debug_mode=False, 
-                 use_ocr=True, ocr_type="easyocr", use_gpu=False):
+    def __init__(
+        self,
+        base_dir: str,
+        output_excel: str | None = None,
+        debug_mode: bool = False,
+        use_ocr: bool = True,
+        ocr_type: str | None = "easyocr",
+        use_gpu: bool = False,
+        config: dict[str, Any] | None = None,
+    ) -> None:
         self.base_dir = base_dir
-        self.output_excel_path = output_excel or os.path.join(base_dir, f"Fatture_Estratte_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
         self.debug_mode = debug_mode
         self.use_ocr = use_ocr
         self.ocr_type = ocr_type
         self.use_gpu = use_gpu
-        
-        # Campi che vogliamo estrarre dalle fatture
-        self.fields = [
-            "numero_fattura", 
-            "data_emissione", 
-            "fornitore", 
-            "partita_iva_fornitore",
-            "cliente", 
-            "partita_iva_cliente", 
-            "importo_totale", 
-            "imponibile",
-            "percentuale_iva", 
-            "importo_iva", 
-            "metodo_pagamento"
-        ]
-        
-        # Definizione delle zone della fattura (in percentuale dell'altezza dell'immagine)
+        self.config = config or {}
+
+        self.output_excel_path = output_excel or os.path.join(
+            base_dir,
+            f"Fatture_Estratte_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        )
+
+        self.fields = self.config.get("fields", DEFAULT_FIELDS)
+
+        zones_cfg = self.config.get("zones", {})
         self.zones = {
-            'intestazione': (0, 0.35),    # Primi 35% dell'immagine
-            'corpo': (0.25, 0.75),        # Dal 25% al 75% dell'immagine (sovrapposizione)
-            'pie_pagina': (0.65, 1.0)     # Dal 65% alla fine (sovrapposizione)
-        }
-        
-        # Inizializza i processori
+            k: tuple(v) for k, v in zones_cfg.items()
+        } if zones_cfg else DEFAULT_ZONES
+
         self.pdf_processor = PDFProcessor(debug_mode=debug_mode)
         self.image_processor = ImageProcessor(debug_mode=debug_mode)
-        
-        # Inizializza OCR usando la factory
+
         if use_ocr:
             self.ocr_processor = OCRFactory.create_ocr_processor(
                 ocr_type=ocr_type,
                 debug_mode=debug_mode,
                 use_gpu=use_gpu,
-                lang="it"
+                lang="it",
             )
-            
-            if not hasattr(self.ocr_processor, 'ocr_available') or not self.ocr_processor.ocr_available:
-                print("OCR non disponibile, passaggio alla modalità senza OCR")
+            if not getattr(self.ocr_processor, "ocr_available", False):
+                logger.warning("OCR non disponibile, passaggio alla modalita' senza OCR")
                 self.use_ocr = False
         else:
             self.ocr_processor = None
-            
-        # Inizializza AIExtractor con l'interfaccia semplificata (nota che ora non passiamo self.zones)
-        self.ai_extractor = AIExtractor(self.fields, debug_mode=debug_mode)
+
+        ai_cfg = self.config.get("ai", {})
+        self.ai_extractor = AIExtractor(
+            self.fields,
+            debug_mode=debug_mode,
+            model=ai_cfg.get("model"),
+            temperature=ai_cfg.get("temperature", 0.1),
+        )
         self.data_validator = DataValidator(self.fields, debug_mode=debug_mode)
 
     def extract_ocr_from_pdf(self, pdf_path, temp_dir):
@@ -82,19 +106,16 @@ class InvoiceProcessor:
         pdf_temp_dir = os.path.join(temp_dir, pdf_name.replace('.pdf', ''))
         os.makedirs(pdf_temp_dir, exist_ok=True)
         
-        # Converte il PDF in immagini ad alta risoluzione (aumentato a 300 DPI)
-        print("  - Conversione PDF in immagini ad alta risoluzione (300 DPI)")
+        logger.info("Conversione PDF in immagini ad alta risoluzione (300 DPI)")
         image_paths = self.pdf_processor.convert_pdf_to_images(pdf_path, pdf_temp_dir)
         
-        # Pre-elabora le immagini per migliorare la qualità
-        print("  - Miglioramento qualità delle immagini")
+        logger.info("Miglioramento qualita' delle immagini")
         processed_paths = []
         for image_path in image_paths:
             processed_path = self.image_processor.preprocess_image(image_path)
             processed_paths.append(processed_path)
         
-        # Estrai le zone dalla prima pagina
-        print("  - Estrazione delle zone dalla prima pagina")
+        logger.info("Estrazione delle zone dalla prima pagina")
         zones_data = {}
         if processed_paths:
             main_image = processed_paths[0]
@@ -112,263 +133,192 @@ class InvoiceProcessor:
             'pdf_name': pdf_name
         }
 
-    def analyze_invoice(self, pdf_ocr_data):
-        """
-        Analizza una fattura seguendo il flusso richiesto:
-        1. Analizza ogni sezione individualmente senza OCR
-        2. Analizza il documento completo per i campi mancanti senza OCR
-        3. Usa OCR solo se necessario e solo per le sezioni con campi mancanti
-        """
+    def analyze_invoice(self, pdf_ocr_data: dict) -> dict:
         results = {field: "non trovato" for field in self.fields}
-        results['nome_file'] = pdf_ocr_data['pdf_name']
-        
+        results["nome_file"] = pdf_ocr_data["pdf_name"]
+
         # FASE 1: Analizza ogni sezione individualmente senza OCR
-        print("  - Fase 1: Analisi delle sezioni senza OCR")
-        zone_results = self.analyze_sections_without_ocr(pdf_ocr_data['zones'])
-        
-        # Aggiorna i risultati con i dati trovati nelle zone
+        logger.info("Fase 1: Analisi delle sezioni senza OCR")
+        zone_results = self.analyze_sections_without_ocr(pdf_ocr_data["zones"])
+
         for field in self.fields:
             for zone_name, zone_data in zone_results.items():
                 if field in zone_data and zone_data[field] != "non trovato":
                     results[field] = zone_data[field]
-                    print(f"    - Campo '{field}' trovato nella zona '{zone_name}'")
-        
-        # Controlla quali campi sono ancora mancanti
-        missing_fields = [field for field in self.fields if results[field] == "non trovato"]
-        print(f"    - Campi ancora mancanti dopo analisi delle sezioni: {len(missing_fields)}/{len(self.fields)}")
-        
+                    logger.debug("Campo '%s' trovato nella zona '%s'", field, zone_name)
+
+        missing_fields = [f for f in self.fields if results[f] == "non trovato"]
+        logger.info("Campi mancanti dopo analisi zone: %d/%d", len(missing_fields), len(self.fields))
+
         # FASE 2: Analizza il documento completo per i campi mancanti
         if missing_fields:
-            print(f"  - Fase 2: Analisi del documento completo per {len(missing_fields)} campi mancanti")
-            main_image_path = pdf_ocr_data['pages'][0]['image_path']
+            logger.info("Fase 2: Analisi documento completo per %d campi mancanti", len(missing_fields))
+            main_image_path = pdf_ocr_data["pages"][0]["image_path"]
             full_doc_results = self.analyze_full_document_without_ocr(main_image_path, missing_fields)
-            
-            # Aggiorna i risultati con i dati trovati nel documento completo
+
             for field, value in full_doc_results.items():
                 if value != "non trovato":
                     results[field] = value
-                    print(f"    - Campo '{field}' trovato nell'analisi del documento completo")
-            
-            # Aggiorna la lista dei campi mancanti
-            missing_fields = [field for field in self.fields if results[field] == "non trovato"]
-            print(f"    - Campi ancora mancanti dopo analisi completa: {len(missing_fields)}/{len(self.fields)}")
-        
-        # FASE 3: Usa OCR solo per le sezioni con campi mancanti se necessario
+                    logger.debug("Campo '%s' trovato nell'analisi documento completo", field)
+
+            missing_fields = [f for f in self.fields if results[f] == "non trovato"]
+            logger.info("Campi mancanti dopo analisi completa: %d/%d", len(missing_fields), len(self.fields))
+
+        # FASE 3: OCR solo per campi ancora mancanti
         if missing_fields and self.use_ocr:
-            print(f"  - Fase 3: Utilizzo OCR per {len(missing_fields)} campi ancora mancanti")
-            ocr_results = self.analyze_sections_with_ocr(pdf_ocr_data['zones'], missing_fields)
-            
-            # Aggiorna i risultati con i dati trovati tramite OCR
+            logger.info("Fase 3: OCR per %d campi mancanti", len(missing_fields))
+            ocr_results = self.analyze_sections_with_ocr(pdf_ocr_data["zones"], missing_fields)
+
             for field, value in ocr_results.items():
                 if value != "non trovato":
                     results[field] = value
-                    print(f"    - Campo '{field}' trovato con supporto OCR")
-        
-        # Validazione finale dei risultati
+                    logger.debug("Campo '%s' trovato con supporto OCR", field)
+
         results = self.data_validator.validate_results(results)
-        
-        # Mostra riepilogo finale
-        found_fields = sum(1 for f in results.values() if f != "non trovato" and f != pdf_ocr_data['pdf_name'])
-        total_fields = len(self.fields)
-        print(f"  - Riepilogo finale: Trovati {found_fields}/{total_fields} campi")
-        
+
+        found = sum(1 for v in results.values() if v != "non trovato" and v != pdf_ocr_data["pdf_name"])
+        logger.info("Riepilogo: trovati %d/%d campi", found, len(self.fields))
         return results
 
-    def analyze_sections_without_ocr(self, zones_data):
-        """Analizza tutte le sezioni del documento senza usare OCR"""
-        zone_results = {}
-        
+    def analyze_sections_without_ocr(self, zones_data: dict) -> dict:
+        zone_results: dict = {}
+
         for zone_name, zone_data in zones_data.items():
-            print(f"    - Analisi zona '{zone_name}' senza OCR")
-            
-            # Verifica che il percorso dell'immagine esista
-            image_path = zone_data['image_path']
+            logger.info("Analisi zona '%s' senza OCR", zone_name)
+            image_path = zone_data["image_path"]
+
             if not os.path.isfile(image_path):
-                print(f"    - Warning: File not found: {image_path}")
+                logger.warning("File non trovato: %s", image_path)
                 continue
-            
+
             try:
-                # Analizza la zona con il modello AI (senza OCR)
-                # Nota: nella nuova API, passiamo zone_name solo per debug
-                zone_results[zone_name] = self.ai_extractor.analyze_zone(
-                    image_path, 
-                    zone_name  # Ora opzionale e solo per debug
-                )
-                
-                # Conta campi trovati
-                found_in_zone = sum(1 for v in zone_results[zone_name].values() if v != "non trovato")
-                print(f"      - Trovati {found_in_zone} campi nella zona '{zone_name}'")
+                zone_results[zone_name] = self.ai_extractor.analyze_zone(image_path, zone_name)
+                found = sum(1 for v in zone_results[zone_name].values() if v != "non trovato")
+                logger.info("Trovati %d campi nella zona '%s'", found, zone_name)
             except Exception as e:
-                print(f"    - Errore nell'analisi della zona '{zone_name}': {str(e)}")
+                logger.error("Errore nell'analisi della zona '%s': %s", zone_name, e)
                 zone_results[zone_name] = {}
-        
+
         return zone_results
 
-    def analyze_full_document_without_ocr(self, image_path, missing_fields):
-        """Analizza l'intero documento senza OCR per trovare i campi mancanti"""
+    def analyze_full_document_without_ocr(self, image_path: str, missing_fields: list[str]) -> dict:
         if not missing_fields:
             return {}
-        
+
         try:
-            # Nella versione semplificata, non abbiamo più analyze_missing_fields
-            # Usiamo la stessa analyze_zone ma sul documento principale
-            document_results = self.ai_extractor.analyze_zone(
-                image_path,
-                "documento_completo"  # solo per debug
-            )
-            
-            # Filtra solo i campi mancanti che abbiamo trovato
-            filtered_results = {k: v for k, v in document_results.items() 
-                              if k in missing_fields and v != "non trovato"}
-            
-            # Conta campi trovati
-            found_fields = len(filtered_results)
-            print(f"      - Trovati {found_fields}/{len(missing_fields)} campi nell'analisi completa")
-            
-            return filtered_results
+            document_results = self.ai_extractor.analyze_zone(image_path, "documento_completo")
+            filtered = {k: v for k, v in document_results.items()
+                        if k in missing_fields and v != "non trovato"}
+            logger.info("Trovati %d/%d campi nell'analisi completa", len(filtered), len(missing_fields))
+            return filtered
         except Exception as e:
-            print(f"    - Errore nell'analisi del documento completo: {str(e)}")
+            logger.error("Errore nell'analisi del documento completo: %s", e)
             return {}
 
-    def analyze_sections_with_ocr(self, zones_data, missing_fields):
-        """Analizza le sezioni con OCR, ma solo per i campi ancora mancanti"""
+    def analyze_sections_with_ocr(self, zones_data: dict, missing_fields: list[str]) -> dict:
         if not missing_fields or not self.use_ocr or not self.ocr_processor:
             return {}
-        
-        combined_results = {}
-        
-        # Mappa dei campi più probabilmente trovabili in ciascuna zona
+
+        combined_results: dict = {}
+
         zone_field_mapping = {
-            'intestazione': ["numero_fattura", "data_emissione", "fornitore", "partita_iva_fornitore", 
-                            "cliente", "partita_iva_cliente"],
-            'corpo': ["imponibile", "percentuale_iva", "importo_iva"],
-            'pie_pagina': ["importo_totale", "metodo_pagamento"]
+            "intestazione": ["numero_fattura", "data_emissione", "fornitore",
+                             "partita_iva_fornitore", "cliente", "partita_iva_cliente"],
+            "corpo": ["imponibile", "percentuale_iva", "importo_iva"],
+            "pie_pagina": ["importo_totale", "metodo_pagamento"],
         }
-        
-        # Per ogni zona, verifica se ci sono campi mancanti che potrebbero essere in quella zona
+
         for zone_name, zone_data in zones_data.items():
-            # Filtra i campi mancanti che sono più probabilmente in questa zona
-            zone_missing_fields = [field for field in missing_fields 
-                                if field in zone_field_mapping.get(zone_name, [])]
-            
-            if not zone_missing_fields:
+            zone_missing = [f for f in missing_fields if f in zone_field_mapping.get(zone_name, [])]
+            if not zone_missing:
                 continue
-            
-            print(f"    - Analisi zona '{zone_name}' con OCR per {len(zone_missing_fields)} campi")
-            
-            # Verifica che il percorso dell'immagine esista
-            image_path = zone_data['image_path']
+
+            logger.info("Analisi zona '%s' con OCR per %d campi", zone_name, len(zone_missing))
+            image_path = zone_data["image_path"]
+
             if not os.path.isfile(image_path):
-                print(f"    - Warning: File not found: {image_path}")
+                logger.warning("File non trovato: %s", image_path)
                 continue
-            
+
             try:
-                # Esegui OCR solo ora, e solo su questa zona
                 ocr_text = self.ocr_processor.extract_ocr_text(image_path)
-                
-                # Aggiorna i dati della zona con il testo OCR
-                zone_data['ocr_text'] = ocr_text
-                
-                # Analizza la zona con il supporto OCR
-                # Nota l'ordine dei parametri cambiato nella nuova API
-                zone_results = self.ai_extractor.analyze_zone_with_ocr(
-                    image_path,
-                    ocr_text,
-                    zone_name  # solo per debug
-                )
-                
-                # Filtra solo i campi che stiamo cercando
-                filtered_results = {k: v for k, v in zone_results.items() 
-                                if k in zone_missing_fields and v != "non trovato"}
-                
-                # Aggiorna i risultati combinati
-                combined_results.update(filtered_results)
-                
-                # Conta campi trovati
-                found_with_ocr = len(filtered_results)
-                print(f"      - Trovati {found_with_ocr}/{len(zone_missing_fields)} campi con OCR nella zona '{zone_name}'")
-                
+                zone_data["ocr_text"] = ocr_text
+
+                zone_results = self.ai_extractor.analyze_zone_with_ocr(image_path, ocr_text, zone_name)
+                filtered = {k: v for k, v in zone_results.items()
+                            if k in zone_missing and v != "non trovato"}
+                combined_results.update(filtered)
+                logger.info("Trovati %d/%d campi con OCR nella zona '%s'", len(filtered), len(zone_missing), zone_name)
             except Exception as e:
-                print(f"    - Errore nell'analisi OCR della zona '{zone_name}': {str(e)}")
-        
+                logger.error("Errore nell'analisi OCR della zona '%s': %s", zone_name, e)
+
         return combined_results
 
-    def process_all_pdfs(self):
-        """Elabora tutti i file PDF nella directory specificata, uno alla volta."""
-        # Ottieni tutti i file PDF
+    def _cleanup_temp(self, temp_dir: str) -> None:
+        if os.path.isdir(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger.debug("Rimossa cartella temporanea: %s", temp_dir)
+
+    def process_all_pdfs(self) -> pd.DataFrame | None:
         pdf_files = glob.glob(os.path.join(self.base_dir, "*.pdf"))
         if not pdf_files:
-            print("Nessun file PDF trovato nella directory")
-            return
-        
-        print(f"Numero di file da gestire: {len(pdf_files)}")
-        
-        # Lista per raccogliere tutti i risultati
-        all_results = []
-        
-        # Crea cartelle temporanee
+            logger.warning("Nessun file PDF trovato nella directory")
+            return None
+
+        logger.info("File da elaborare: %d", len(pdf_files))
+
+        all_results: list[dict] = []
         temp_dir = os.path.join(self.base_dir, "temp")
         os.makedirs(temp_dir, exist_ok=True)
-        
+
         if self.debug_mode:
             debug_dir = os.path.join(self.base_dir, "debug_reports")
             os.makedirs(debug_dir, exist_ok=True)
-        
-        # Elabora ogni PDF completamente prima di passare al successivo
+
         for i, pdf_file in enumerate(pdf_files, 1):
             pdf_name = os.path.basename(pdf_file)
-            print("-" * 50)
-            print(f"Inizio elaborazione file {i}/{len(pdf_files)} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"File Name: {pdf_name}")
+            logger.info("-" * 50)
+            logger.info("Elaborazione file %d/%d: %s", i, len(pdf_files), pdf_name)
             start_time = time.time()
-            
+
             try:
-                # Fase 1: Conversione del PDF in immagini e preprocessamento
-                print(f"Fase 1: Conversione PDF in immagini e preprocessamento")
+                logger.info("Fase 1: Conversione PDF e preprocessing")
                 pdf_ocr_data = self.extract_ocr_from_pdf(pdf_file, temp_dir)
-                
-                # Fase 2: Analisi della fattura con il nuovo flusso
-                print(f"Fase 2: Analisi della fattura con il nuovo flusso")
+
+                logger.info("Fase 2: Analisi fattura")
                 results = self.analyze_invoice(pdf_ocr_data)
-                
-                # Aggiungi nome_file ai risultati
-                results['nome_file'] = pdf_name
-                
-                # Fase 3: Salva i risultati in modalità debug
+                results["nome_file"] = pdf_name
+
                 if self.debug_mode:
-                    print(f"Fase 3: Debug mode - Salvataggio report dettagliato")
+                    logger.debug("Salvataggio report debug")
                     report_path = os.path.join(debug_dir, f"{pdf_name}_report.json")
-                    with open(report_path, 'w', encoding='utf-8') as f:
+                    with open(report_path, "w", encoding="utf-8") as f:
                         json.dump(results, f, indent=4, ensure_ascii=False)
-                
-                # Aggiungi i risultati alla lista principale
+
                 all_results.append(results)
-                
+
             except Exception as e:
-                print(f"Errore nell'elaborazione di {pdf_name}: {str(e)}")
-                # Aggiungi comunque un risultato vuoto con il nome del file
+                logger.error("Errore nell'elaborazione di %s: %s", pdf_name, e)
                 empty_result = {field: "non trovato" for field in self.fields}
-                empty_result['nome_file'] = pdf_name
+                empty_result["nome_file"] = pdf_name
                 all_results.append(empty_result)
-            
-            # Calcola e mostra il tempo di elaborazione per questo file
-            elapsed_time = time.time() - start_time
-            print(f"File elaborato in {elapsed_time:.1f} secondi - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Crea il dataframe con tutti i risultati
+
+            elapsed = time.time() - start_time
+            logger.info("File elaborato in %.1f secondi", elapsed)
+
+        # Pulizia file temporanei
+        if not self.debug_mode:
+            self._cleanup_temp(temp_dir)
+
         final_df = pd.DataFrame(all_results)
-        
-        # Riordina le colonne per avere nome_file e numero_fattura all'inizio
+
         columns = final_df.columns.tolist()
         if "nome_file" in columns and "numero_fattura" in columns:
             columns.remove("nome_file")
             columns.remove("numero_fattura")
-            column_order = ["nome_file", "numero_fattura"] + columns
-            final_df = final_df[column_order]
-        
-        # Salva i risultati in Excel (solo una volta alla fine dell'elaborazione)
+            final_df = final_df[["nome_file", "numero_fattura"] + columns]
+
         final_df.to_excel(self.output_excel_path, index=False)
-        print(f"\nFile Excel salvato in: {self.output_excel_path}")
-        
-        print("\nElaborazione completata con successo!")
+        logger.info("File Excel salvato in: %s", self.output_excel_path)
+        logger.info("Elaborazione completata con successo!")
         return final_df

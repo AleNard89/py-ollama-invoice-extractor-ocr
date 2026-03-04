@@ -1,0 +1,41 @@
+# Invoice Extractor Configuration
+
+# AI Model settings
+ai:
+  model: "qwen2.5vl:7b"
+  temperature: 0.1
+
+# OCR settings (set engine to null to disable OCR)
+# Available engines: easyocr, paddleocr, tesseract
+ocr:
+  engine: null
+  use_gpu: false
+
+# PDF processing
+pdf:
+  dpi: 300
+
+# Output settings
+output:
+  format: "xlsx"  # xlsx or csv
+  debug_mode: false
+
+# Zone segmentation (percentage of image height)
+zones:
+  intestazione: [0, 0.35]
+  corpo: [0.25, 0.75]
+  pie_pagina: [0.65, 1.0]
+
+# Fields to extract from invoices
+fields:
+  - numero_fattura
+  - data_emissione
+  - fornitore
+  - partita_iva_fornitore
+  - cliente
+  - partita_iva_cliente
+  - importo_totale
+  - imponibile
+  - percentuale_iva
+  - importo_iva
+  - metodo_pagamento

@@ -5,10 +5,13 @@ Author: Alessandro.Nardelli
 Date: 2025-03-21
 """
 
+import logging
 import os
+
 import cv2
 import numpy as np
-from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class ImageProcessor:
     def __init__(self, debug_mode=False):
@@ -119,7 +122,7 @@ class ImageProcessor:
         if enhance_contrast:
             high_contrast_path = image_path.replace('.png', '_high_contrast.png')
             cv2.imwrite(high_contrast_path, thresh)
-            print(f"  - Creata immagine ad alto contrasto: {os.path.basename(high_contrast_path)}")
+            logger.debug("Creata immagine ad alto contrasto: %s", os.path.basename(high_contrast_path))
         
         # Applica deskew all'immagine processata
         deskewed_path = self.deskew(processed_path)
@@ -202,7 +205,7 @@ class ImageProcessor:
         # Salva l'immagine dell'intestazione migliorata
         header_path = image_path.replace('.png', '_header_enhanced.png')
         cv2.imwrite(header_path, binary)
-        print(f"  - Creata immagine intestazione migliorata: {os.path.basename(header_path)}")
+        logger.debug("Creata immagine intestazione migliorata: %s", os.path.basename(header_path))
         
         return header_path
 
